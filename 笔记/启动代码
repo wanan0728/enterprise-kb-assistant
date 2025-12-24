@@ -1,0 +1,31 @@
+启动本地服务器（后端）
+uvicorn app.main:app --reload --port 8002
+
+启动前端
+streamlit run ui/streamlit_app.py
+
+启动chroma
+chroma run --host 0.0.0.0 --port 8000 --path ./chroma_data
+
+启动fastapi
+uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+
+启动docker
+docker run -d \
+  -p 8000:8000 \
+  --name chromadb \
+  chromadb/chroma
+
+
+
+ub终端使用启动代码
+# 查看所有容器（包括停止的）
+docker ps -a
+
+# 只查看运行中的容器
+docker ps
+
+# 如果容器名分别是 chromadb1, chromadb2, chromadb3
+docker start chromadb1
+docker start chromadb2
+docker start chromadb3

@@ -1,0 +1,28 @@
+测试代码1：
+测试用代码（main）
+curl -X POST "http://127.0.0.1:8002/ingest" \
+  -F "file=@./data/docs/制度示例1_员工年假与请假管理办法2.docx" \
+  -F "visibility=public"
+
+
+测试代码2：
+启动服务uvicorn app.main:app --reload --port 8002后
+peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter"}'
+我这边可以得到结果
+{"answer":"缺少信息：start_time、end_time。请补充/修正后再说一次。"}%
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我要请年假，2025-11-26 09:00 到 2025-11-26 18:00","user_role":"public","requester":"peter"}'
+然后我这边又得到结果
+{"answer":"请确认你的请假信息：\n- 类型：annual\n- 开始：2025-11-26 09:00\n- 结束：2025-11-26 18:00\n- 时长：1.12 天\n- 原因：无\n回复“确认”提交，或直接回复修改后的信息。"}%
+
+注意，我们发出
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认提交年假申请","user_role":"public","requester":"peter"}'
+又得到这个结果
+{"answer":"缺少信息：start_time、end_time。请补充/修正后再说一次。"}%
+
+主要是没有记忆
