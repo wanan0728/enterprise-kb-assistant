@@ -1,0 +1,237 @@
+v1版本主要的作用是快速原型开发。
+在这个阶段会用到一些后面不用的技术，这些技术主要为了客户进行信息的展示使用。
+原型开发。
+
+1. 修改requirements.txt，添加
+python-multipart==0.0.20
+aiofiles==24.1.0
+streamlit==1.40.2
+之后
+pip install -U -r requirements.txt
+
+
+2. 打开app/ingestion/loader.py，在文件最底部追加下面代码：
+第一个函数主要是为了应对后续文件单独追加而设计的，他就是处理一个单独的文件而已。
+def load_single_file(path: Path) -> List[Document]:
+    """根据文件后缀加载文件，返回LangChain的 Document列表"""
+    suf = path.suffix.lower()
+    if suf == ".pdf":
+        return load_pdf(path)
+    if suf in [".docx", ".doc"]:
+        return load_docx(path)
+    if suf in [".md", ".txt"]:
+        text = path.read_text(encoding="utf-8")
+        return [Document(page_content=text, metadata={"source": str(path)})] if text.strip() else []
+    return []
+
+第二个函数主要是把一批Document切成小块，并且给每一小块贴上权限标签visibility和文档ID。
+def split_with_visibility(docs: List[Document], visibility: str, doc_id: str | None = None) -> List[Document]:
+    chunks = split_docs(docs)
+    for c in chunks:
+        c.metadata = dict(c.metadata or {})
+        c.metadata["visibility"] = visibility
+        if doc_id:
+            c.metadata["doc_id"] = doc_id
+    return chunks
+
+
+
+3. app/main.py整个覆盖成下面这个（新增/ingest和/reindex）
+from __future__ import annotations
+
+添加如下依赖
+from app.deps import get_vs, get_embeddings
+from app.ingestion.loader import load_single_file, split_with_visibility, load_docs, split_docs
+from app.config import settings
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+import chromadb
+
+修改
+from fastapi import FastAPI
+为
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+
+添加
+DATA_DOCS_DIR = Path("./data/docs")
+DATA_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.post("/ingest")
+async def ingest(
+    file: UploadFile = File(...),
+    visibility: str = Form("public"),
+    doc_id: Optional[str] = Form(None)):
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Empty filename")
+
+    visibility = (visibility or "public").strip().lower()
+
+    suffix = Path(file.filename).suffix
+    safe_name = f"{int(time.time())}_{uuid.uuid4().hex}{suffix}"
+    save_path = DATA_DOCS_DIR / safe_name
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    save_path.write_bytes(content)
+
+    docs = load_single_file(save_path)
+    if not docs:
+        raise HTTPException(status_code=400, detail=f"Unsupported or empty file type: {suffix}")
+
+    chunks = split_with_visibility(docs, visibility=visibility, doc_id=doc_id)
+
+    vs = get_vs()
+    vs.add_documents(chunks)
+
+    return {
+        "saved_as": str(save_path),
+        "visibility": visibility,
+        "doc_id": doc_id,
+        "chunks": len(chunks),
+    }
+
+
+@app.post("/reindex")
+def reindex(visibility_default: str = Form("public")):
+    visibility_default = (visibility_default or "public").strip().lower()
+
+    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+    try:
+        client.delete_collection(settings.collection_name)
+    except Exception:
+        print('================删除chromadb报错了')
+    client.get_or_create_collection(settings.collection_name)
+
+    vs = get_vs()
+    raw_docs = load_docs(str(DATA_DOCS_DIR))
+    if not raw_docs:
+        return {"chunks": 0, "docs": 0, "message": "No documents found in data/docs"}
+
+    chunks = split_docs(raw_docs)
+    for c in chunks:
+        c.metadata = dict(c.metadata or {})
+        c.metadata.setdefault("visibility", visibility_default)
+
+    vs.add_documents(chunks)
+
+    return {"docs": len(raw_docs), "chunks": len(chunks), "visibility_default": visibility_default}
+
+
+@app.get("/")
+def root():
+    return {"status": "ok", "docs": "/docs"}
+
+下面是运行和测试
+uvicorn app.main:app --reload --port 8002
+测试
+curl -X POST "http://127.0.0.1:8002/ingest" \
+  -F "file=@./data/docs/制度示例1_员工年假与请假管理办法.docx" \
+  -F "visibility=public"
+
+如果要实验，另一边的同学电脑运行这个项目即可，你自己这边什么都不用开。
+pycharm都不用打开，直接用curl命令就可以了。
+
+看到类似，正确
+{"saved_as":"data/docs/1763797854_41837761cfd74278adaa786b39b33746.docx","visibility":"public","doc_id":null,"chunks":1}
+
+如果需要全量重建：
+curl -X POST "http://127.0.0.1:8002/reindex" -F "visibility_default=public"
+
+
+4. ui/streamlit_app.py
+Streamlit是一个用Python快速做网页界面的框架，专门给数据科学、AI demo、原型用的。
+写几行Python就能立刻有一个带按钮、输入框、图表的网页，不用写HTML/CSS/JS。
+我们这里就是玩一下，懒得搞前端了，用一个网页测试一下。
+下面都是AI写成，无需记忆，不用背，不用管，后面会用其它专业一点的前端框架。
+
+import streamlit as st
+import requests
+
+API_BASE = "http://127.0.0.1:8002"
+
+st.set_page_config(page_title="Enterprise KB Assistant", layout="wide")
+
+# ---- deep blue modern theme ----
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: radial-gradient(1200px circle at 10% 0%, #0b2a5b 0%, #06162f 45%, #040b19 100%);
+        color: #e6eefc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    .block-container { padding-top: 2rem; }
+    h1, h2, h3, h4 { color: #e6eefc; }
+    .card {
+        background: rgba(8, 22, 48, 0.85);
+        border: 1px solid rgba(120,160,220,0.25);
+        border-radius: 16px;
+        padding: 16px 18px;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+    }
+    .small { color: #b9c8e6; font-size: 0.9rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown("<h1>🏢 Enterprise Knowledge Assistant</h1>", unsafe_allow_html=True)
+st.markdown('<div class="small">Upload policies / ask questions / see citations.</div>', unsafe_allow_html=True)
+st.write("")
+
+col1, col2 = st.columns([0.38, 0.62], gap="large")
+
+with col1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📎 文档上传入库")
+    uploaded = st.file_uploader("选择 Word/PDF/MD/TXT", type=["pdf","docx","doc","md","txt"])
+    visibility = st.selectbox("可见性", ["public", "hr", "finance", "it"], index=0)
+    doc_id = st.text_input("doc_id（可选）", "")
+    if st.button("上传并入库", use_container_width=True, type="primary") and uploaded:
+        files = {"file": (uploaded.name, uploaded.getvalue())}
+        data = {"visibility": visibility}
+        if doc_id.strip():
+            data["doc_id"] = doc_id.strip()
+        r = requests.post(f"{API_BASE}/ingest", files=files, data=data, timeout=120)
+        if r.ok:
+            st.success(f"入库成功：chunks={r.json().get('chunks')}")
+        else:
+            st.error(r.text)
+    st.write("")
+    if st.button("全量重建（清库+重建）", use_container_width=True):
+        r = requests.post(f"{API_BASE}/reindex", data={"visibility_default": "public"}, timeout=300)
+        if r.ok:
+            st.success(f"重建完成：chunks={r.json().get('chunks')}")
+        else:
+            st.error(r.text)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("💬 企业知识问答")
+    q = st.text_area("输入你的问题", height=120, placeholder="例如：年假需要提前多久申请？")
+    role = st.selectbox("你的角色", ["public", "hr", "finance", "it_admin", "manager"], index=0)
+    if st.button("发送", use_container_width=True) and q.strip():
+        payload = {"text": q.strip(), "user_role": role, "requester": "streamlit"}
+        r = requests.post(f"{API_BASE}/chat", json=payload, timeout=120)
+        if r.ok:
+            st.markdown("**回答：**")
+            st.write(r.json()["answer"])
+        else:
+            st.error(r.text)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+之后测试：
+streamlit run ui/streamlit_app.py
+
+运行和测试前端的前提条件是用curl或者postman等先对后台做了完美的测试才可以。
+‼️后台不正确，总结果一定不正确，不管你加不加前端
+‼️后台正确，也不能保证加了前端后一定正确
+
+
+

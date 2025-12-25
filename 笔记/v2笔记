@@ -1,0 +1,441 @@
+我们开始第二条业务线：请假/年假申请。
+先说清楚做什么？用户通过自然语言，比如：“我下周二想请一天年假”
+系统要能实现：
+1. 识别是“请假业务”而不是普通问答
+2. 抽取必要槽位（leave_type / start / end / duration / reason）
+3. 按制度做规则校验（额度、提前天数、病假证明、最短单位…）
+4. 缺字段就追问补齐（多轮）
+5. 创建请假申请单（mock / 或对接真实HR系统）
+6. 返回结果 + 可查询状态
+
+
+2. 定义模型
+做任何一个业务都是数据库/模型先确定好。
+app/workflows/leave/models.py
+
+from enum import Enum
+from typing import Optional, List, TypedDict, Any
+from pydantic import BaseModel, Field
+
+class LeaveType(str, Enum):
+    annual = "annual"      # 年假
+    sick = "sick"          # 病假
+    personal = "personal"  # 事假
+    other = "other"
+
+# 这个类表示的是请假单，模型就是一组数据
+# 模型类对应关系型数据库的表结构，一个对象对应表中的一行。这叫“对象-关系映射ORM”
+class LeaveRequest(BaseModel):
+    requester: str
+    leave_type: LeaveType = LeaveType.annual
+    start_time: Optional[str] = None  # "YYYYT-MM-DD HH:MM"
+    end_time: Optional[str] = None
+    duration_days: Optional[float] = None
+    reason: Optional[str] = None
+
+
+class LeaveState(TypedDict, total=False):
+    text: str
+    requester: str
+    user_role: str
+
+    req: dict            # LeaveRequest as dict
+    missing_fields: List[str]
+    violations: List[str]
+
+    answer: str
+    confirmed: bool
+    leave_id: Optional[str]  # LV-XXXXXXXX
+
+
+3. 规则教研
+app/workflows/leave/rules.py
+from typing import List, Tuple, Dict, Any
+from datetime import datetime, timedelta
+
+def validate_leave(req: Dict[str, Any], balance_days: float = 5.0) -> Tuple[List[str], List[str]]:
+
+    missing = []
+    violations = []
+
+    for f in ["leave_type", "start_time", "end_time"]:
+        if not req.get(f):
+            missing.append(f)
+
+    if missing:
+        return missing, violations
+
+    # parse time
+    try:
+        # 所有前台拿来的内容全都是str类型，即便是数字，也是str类型
+        start = datetime.fromisoformat(req["start_time"])
+        end = datetime.fromisoformat(req["end_time"])
+    except Exception:
+        violations.append("start_time/end_time格式应为ISO（YYYY-MM-DD HH:MM）")
+        return missing, violations
+
+    if end <= start:
+        violations.append("结束时间必须晚于开始时间")
+
+    duration = (end - start).total_seconds() / 3600.0 / 8.0
+    if duration < 0.5:
+        violations.append("最小请假单位为半天")
+
+    leave_type = req.get("leave_type")
+    if leave_type == "annual":
+        if duration > balance_days:
+            violations.append(f"年假余额不足（剩余 {balance_days} 天）")
+        # 提前1个工作日
+        if start < datetime.now() + timedelta(days=1):
+            violations.append("年假需至少提前1个工作日提交")
+
+    if leave_type == "sick":
+        if duration >= 1 and not req.get("reason"):
+            violations.append("病假超过1天需提供病假原因/证明说明")
+
+    req["duration_days"] = round(duration, 2)
+    return missing, violations
+
+
+4. Leave子图
+langgraph主要用来处理企业中非常复杂的业务工作流
+槽位：自然语言中那些关键的数据信息，比如年假、开始时间、结束时间
+抽槽：将以上信息提取出来
+抽槽节点：完成抽槽的那段代码
+app/workflows/leave/leave_graph.py
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime
+from typing import Any, Dict
+
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.deps import get_llm
+from app.workflows.leave.models import LeaveState
+from app.workflows.leave.rules import validate_leave
+
+SLOT_SYSTEM = (
+    "你是企业HR请假助手。"
+    "你的任务是从用户请假描述中抽取结构化信息。"
+    "只输出JSON，不要解释。"
+)
+
+SLOT_USER = """请从下面文本中抽取字段，输出严格 JSON：
+{{
+  "leave_type": "annual|sick|personal|other",
+  "start_time": "YYYY-MM-DD HH:MM 或 null",
+  "end_time": "YYYY-MM-DD HH:MM 或 null",
+  "reason": "string 或 null"
+}}
+
+要求：
+- 如果用户没有明确说开始/结束时间，就输出 null
+- 时间必须是 ISO 8601 格式（YYYY-MM-DD HH:MM）
+- 不要编造时间
+- 只输出 JSON
+
+文本：{text}
+"""
+
+# 将str格式的json变成一个python中的字典
+def _safe_json_load(s: str) -> Dict[str, Any]:
+    if not s:
+        return {}
+    s = s.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:].strip()
+    try:
+        return json.loads(s)  # loads用于将一个符合json的str变成字典
+    except Exception:
+        return {}
+
+# 检查一个str表示的时间是否符合iso格式，之后转换为datetime并返回
+def _safe_iso(s: Any) -> str | None:
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()
+    try:
+        datetime.fromisoformat(s)
+        return s
+    except Exception:
+        print('日期格式转换失败')
+        return None
+
+
+def extract_slots_node(state: LeaveState) -> dict:
+    llm = get_llm()
+    text = state.get("text", "") or state.get("question", "") or ""
+
+    messages = [
+        SystemMessage(content=SLOT_SYSTEM),
+        HumanMessage(content=SLOT_USER.format(text=text)),
+    ]
+
+    raw = llm.invoke(messages).content
+    data = _safe_json_load(raw)
+
+    req = state.get("req") or {}
+    req.update({
+        "leave_type": data.get("leave_type") or req.get("leave_type"),
+        "start_time": _safe_iso(data.get("start_time")) or req.get("start_time"),
+        "end_time": _safe_iso(data.get("end_time")) or req.get("end_time"),
+        "reason": data.get("reason") or req.get("reason"),
+    })
+    req["requester"] = state.get("requester", "anonymous")
+    return {"req": req}
+
+
+def validate_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    missing, violations = validate_leave(req, balance_days=5.0)
+    return {"missing_fields": missing, "violations": violations, "req": req}
+
+
+def decide_next(state: LeaveState) -> str:
+    if state.get("missing_fields") or state.get("violations"):
+        return "need_info"
+    return "confirm"
+
+
+def need_info_node(state: LeaveState) -> dict:
+    missing = state.get("missing_fields") or []
+    violations = state.get("violations") or []
+
+    tips = []
+    if missing:
+        tips.append("缺少信息：" + "、".join(missing))
+    if violations:
+        tips.append("规则问题：" + "；".join(violations))
+
+    return {"answer": "；".join(tips) + "。请补充/修正后再说一次。"}
+
+
+def confirm_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    ans = (
+        "请确认你的请假信息：\n"
+        f"- 类型：{req.get('leave_type')}\n"
+        f"- 开始：{req.get('start_time')}\n"
+        f"- 结束：{req.get('end_time')}\n"
+        f"- 时长：{req.get('duration_days')} 天\n"
+        f"- 原因：{req.get('reason') or '无'}\n"
+        "回复“确认”提交，或直接回复修改后的信息。"
+    )
+    return {"answer": ans}
+
+def decide_confirm(state: LeaveState) -> str:
+    text = (state.get("text") or "").strip().lower()
+    if text in {"确认", "确定", "yes", "ok", "submit"}:
+        return "create"
+    return "end"
+
+
+def create_leave_node(state: LeaveState) -> dict:
+    leave_id = "LV-" + uuid.uuid4().hex[:8]
+    return {"leave_id": leave_id, "answer": f"已为你提交请假申请，编号 {leave_id}，等待审批。"}
+
+
+def build_leave_graph():
+    g = StateGraph(LeaveState)
+
+    g.add_node("extract", extract_slots_node)
+    g.add_node("validate", validate_node)
+    g.add_node("need_info", need_info_node)
+    g.add_node("confirm", confirm_node)
+    g.add_node("create", create_leave_node)
+
+    g.add_edge(START, "extract")
+    g.add_edge("extract", "validate")
+
+    g.add_conditional_edges(
+        "validate",
+        decide_next,
+        {"need_info": "need_info", "confirm": "confirm"},
+    )
+
+    g.add_conditional_edges(
+        "confirm",
+        decide_confirm,
+        {"create": "create", "end": END},
+    )
+
+    g.add_edge("need_info", END)
+    g.add_edge("create", END)
+
+    return g.compile()
+
+
+
+5. 顶层Router加leave路由
+在app/router_graph.py里引入leave_graph
+
+from __future__ import annotations
+from typing import TypedDict, Any
+from langgraph.graph import StateGraph, START, END
+
+from app.rag.qa_graph import build_qa_graph
+from app.workflows.leave.leave_graph import build_leave_graph
+
+
+class RouterState(TypedDict, total=False):
+    question: str
+    text: str          # 兼容 /chat 的字段
+    user_role: str
+    mode: str          # "qa"/"rag"/"kb"/"leave" 可选提示
+    requester: str
+    active_route: str
+
+    # --- fields produced by subgraphs that we want to keep across turns ---
+    req: dict
+    missing_fields: list[str]
+    violations: list[str]
+
+    answer: str
+    docs: list[Any]
+    leave_id: str
+
+
+def decide_route(state: RouterState) -> str:
+    mode = (state.get("mode") or "").lower().strip()
+
+    active = (state.get("active_route") or "").lower().strip()
+    if active == "leave" and mode not in {"qa", "rag", "kb"}:
+        return "leave"
+
+    # 显式 mode 优先
+    if mode in {"qa", "rag", "kb"}:
+        return "qa"
+    if mode in {"leave", "hr"}:
+        return "leave"
+
+    # 关键词路由
+    text = (state.get("text") or state.get("question") or "").lower()
+    if any(k in text for k in ["请假", "年假", "病假", "事假", "休假", "调休", "假期", "请一天假", "请半天假"]):
+        return "leave"
+
+    return "qa"
+
+
+def route_node(state: RouterState) -> dict:
+    """Router node runnable. Must return dict updates."""
+    return {"active_route": decide_route(state)}
+
+
+def build_router_graph():
+    qa_graph = build_qa_graph()
+    leave_graph = build_leave_graph()
+
+    g = StateGraph(RouterState)
+
+    g.add_node("route", route_node)
+    g.add_node("qa", qa_graph)
+    g.add_node("leave", leave_graph)
+
+    g.add_edge(START, "route")
+
+    g.add_conditional_edges(
+        "route",
+        decide_route,
+        {"qa": "qa", "leave": "leave"},
+    )
+
+    g.add_edge("qa", END)
+    g.add_edge("leave", END)
+
+    return g.compile()
+
+
+router_graph = build_router_graph()
+
+之后测试
+启动服务uvicorn app.main:app --reload --port 8002后
+peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter"}'
+我这边可以得到结果
+{"answer":"缺少信息：start_time、end_time。请补充/修正后再说一次。"}%
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我要请年假，2025-11-26 09:00 到 2025-11-26 18:00","user_role":"public","requester":"peter"}'
+然后我这边又得到结果
+{"answer":"请确认你的请假信息：\n- 类型：annual\n- 开始：2025-11-26 09:00\n- 结束：2025-11-26 18:00\n- 时长：1.12 天\n- 原因：无\n回复“确认”提交，或直接回复修改后的信息。"}%
+
+注意，我们发出
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认提交年假申请","user_role":"public","requester":"peter"}'
+又得到这个结果
+{"answer":"缺少信息：start_time、end_time。请补充/修正后再说一次。"}%
+
+主要是没有记忆
+
+
+6. 增加记忆
+我们最后一步不对的原因是没有会话记忆，此时我们需要添加session_id来达到记忆的效果。
+在app/main.py里改3处：
+
+class ChatReq(BaseModel):
+    text: str
+    user_role: str = "public"
+    requester: str = "anonymous"
+    mode: Optional[str] = None
+    session_id: Optional[str] = None   # ⚠️加这一行
+
+文件顶部放一个全局内存
+在DATA_DOCS_DIR = ... 后面加：
+SESSIONS: dict[str, dict] = {}  # # ⚠️加这一行
+
+/chat里merge上一轮，将
+out = router_graph.invoke(req.model_dump())
+return {"answer": out["answer"]}
+替换成：
+payload = req.model_dump()
+sid = payload.get("session_id")
+
+
+if sid and sid in SESSIONS:
+    prev = SESSIONS[sid]
+    merged = {**prev, **payload}
+    merged["text"] = payload.get("text")
+    payload = merged
+
+out = router_graph.invoke(payload)
+
+if sid:
+    SESSIONS[sid] = {**payload, **out}
+
+return {"answer": out["answer"]}
+
+
+
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我要请年假，2025-11-26 09:00 到 2025-11-26 18:00","user_role":"public","requester":"peter","session_id":"s1"}'
+{"answer":"请确认你的请假信息：\n- 类型：annual\n- 开始：2025-11-26 09:00\n- 结束：2025-11-26 18:00\n- 时长：1.12 天\n- 原因：无\n回复“确认”提交，或直接回复修改后的信息。"}%
+(.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant % curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"s1"}'
+
+{"answer":"已为你提交请假申请，编号 LV-ec201af1，等待审批。"}%
+
+
+有的同学回复确认后，大模型反馈的是确认什么。
+1. 记忆处理出问题了
+2. 怀疑图走错了，比如从leave图走到了qa。仔细看顶层路由图
+
+
+
+
+v2目前为止的问题
+1. 我下周二请一天年假 —— 大模型不能解析，提示缺少内容
+所以，我们才被迫使用“我要请年假，2025-11-26 09:00 到 2025-11-26 18:00”这种提示词
+
+2. 之后才进行确认
+
+
+

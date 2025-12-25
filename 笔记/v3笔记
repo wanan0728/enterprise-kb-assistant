@@ -1,0 +1,854 @@
+v3 本闭环解决两个问题
+1. 在v2的基础上，添加了“查询”和“取消”假期申请两个功能
+1. 用LLM解析下周二/明天下午这种自然语言时间。
+2. MySQL表结构准备好，请假入库，查询状态，取消申请
+
+
+app/workflows/leave/leave_graph.py
+from __future__ import annotations
+
+import json
+import uuid
+import re
+from datetime import datetime
+from typing import Any, Dict
+
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.deps import get_llm
+from app.workflows.leave.models import LeaveState
+from app.workflows.leave.rules import validate_leave
+from app.db.mysql import (
+    get_leave_balance,
+    insert_leave_request,
+    get_leave_request,
+    cancel_leave_request,
+)
+
+# ========= Prompts =========
+
+SLOT_SYSTEM = (
+    "你是企业HR请假助手。"
+    "你的任务是从用户请假描述中抽取结构化信息。"
+    "只输出JSON，不要解释。"
+)
+
+# NOTE: 双大括号避免 .format() KeyError
+SLOT_USER = """请从下面文本中抽取字段，输出严格 JSON：
+{{
+  "leave_type": "annual|sick|personal|other",
+  "start_time": "YYYY-MM-DD HH:MM 或 null",
+  "end_time": "YYYY-MM-DD HH:MM 或 null",
+  "reason": "string 或 null"
+}}
+
+要求：
+- 如果用户没有明确说开始/结束时间，就输出 null
+- 时间必须是 ISO 8601 格式（YYYY-MM-DD HH:MM）
+- 不要编造时间
+- 只输出 JSON
+
+文本：{text}
+"""
+
+TIME_SYSTEM = (
+    "你是时间解析器。"
+    "请把中文自然语言中的请假时间解析为 ISO 8601 start_time/end_time。"
+    "只输出JSON，不要解释。"
+)
+
+# NOTE: 双大括号避免 .format() KeyError
+TIME_USER = """现在时间是：{now}
+用户文本：{text}
+
+请输出严格 JSON：
+{{
+  "start_time": "YYYY-MM-DD HH:MM 或 null",
+  "end_time": "YYYY-MM-DD HH:MM 或 null"
+}}
+
+规则：
+- 能明确推断出具体日期就填 ISO；否则填 null
+- “下周二/明天/后天/本周五”等要结合 now 推断
+- “上午/下午/全天/半天”：
+  - 全天：09:00-18:00
+  - 上午：09:00-12:00
+  - 下午：13:00-18:00
+  - 半天：若只说半天且无上下文，按上午 09:00-12:00
+- 如果文本里已经出现 ISO 时间，直接按其输出
+- 不要编造不存在的日期
+- 只输出 JSON
+"""
+
+# ========= Helpers =========
+
+def _safe_json_load(s: str) -> Dict[str, Any]:
+    if not s:
+        return {}
+    s = s.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:].strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        return {}
+
+def _safe_iso(s: Any) -> str | None:
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()
+    try:
+        datetime.fromisoformat(s)
+        return s
+    except Exception:
+        return None
+
+def _extract_leave_id(text: str) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"\bLV-[0-9a-fA-F]{6,12}\b", text)
+    return m.group(0) if m else None
+
+# ========= Intent Routing =========
+
+def decide_intent(state: LeaveState) -> str:
+    """apply / query / cancel"""
+    text = (state.get("text") or state.get("question") or "").lower()
+
+    if any(k in text for k in ["取消", "撤销", "作废"]):
+        return "cancel"
+
+    if any(k in text for k in ["查询", "查", "状态", "进度", "结果"]):
+        if any(k in text for k in ["请假", "年假", "病假", "事假", "休假", "调休", "假期", "申请", "单"]):
+            return "query"
+
+    return "apply"
+
+def intent_node(state: LeaveState) -> dict:
+    return {}
+
+# ========= Query / Cancel Nodes =========
+
+def query_leave_node(state: LeaveState) -> dict:
+    text = state.get("text") or state.get("question") or ""
+    leave_id = state.get("leave_id") or _extract_leave_id(text)
+
+    if not leave_id:
+        # 如果没有提供id，就到数据库里查找这个用户所有的或者前面几个请假的单子显示出来
+        return {"answer": "请提供请假编号（例如 LV-xxxxxxx），我才能帮你查询。"}
+
+    row = get_leave_request(leave_id)  # 到mysql数据库中按照id查询
+    if not row:
+        return {"answer": f"未找到编号为 {leave_id} 的请假申请。"}
+
+    return {
+        "leave_id": leave_id,
+        "answer": (
+            f"请假单 {leave_id} 当前状态：{row['status']}\n"
+            f"类型：{row['leave_type']}\n"
+            f"开始：{row['start_time']}\n"
+            f"结束：{row['end_time']}\n"
+            f"时长：{row['duration_days']} 天\n"
+            f"原因：{row.get('reason') or '无'}"
+        ),
+    }
+
+def cancel_leave_node(state: LeaveState) -> dict:
+    text = state.get("text") or state.get("question") or ""
+    leave_id = state.get("leave_id") or _extract_leave_id(text)
+
+    if not leave_id:
+        return {"answer": "请提供要取消的请假编号（例如 LV-xxxxxxx）。"}
+
+    ok = cancel_leave_request(leave_id)  # 也是mysql里面写好的取消代码
+    if not ok:
+        return {"answer": "取消失败：未找到该单，或单据不是待审批状态（PENDING）。"}
+
+    return {"leave_id": leave_id, "answer": f"已取消请假申请 {leave_id}。"}
+
+# ========= Apply-flow Nodes =========
+
+def parse_time_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    if _safe_iso(req.get("start_time")) and _safe_iso(req.get("end_time")):
+        return {}
+
+    llm = get_llm()
+    text = state.get("text", "") or state.get("question", "") or ""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    messages = [
+        SystemMessage(content=TIME_SYSTEM),
+        HumanMessage(content=TIME_USER.format(now=now, text=text)),
+    ]
+    raw = llm.invoke(messages).content
+    # 代码调试的时候，这里一定打断点看看raw返回的是不是你要的结果
+    data = _safe_json_load(raw)
+
+    start = _safe_iso(data.get("start_time"))
+    end = _safe_iso(data.get("end_time"))
+
+    if start or end:
+        req.update({
+            "start_time": start or req.get("start_time"),
+            "end_time": end or req.get("end_time"),
+        })
+        return {"req": req}
+    return {}
+
+def extract_slots_node(state: LeaveState) -> dict:
+    llm = get_llm()
+    text = state.get("text", "") or state.get("question", "") or ""
+
+    messages = [
+        SystemMessage(content=SLOT_SYSTEM),
+        HumanMessage(content=SLOT_USER.format(text=text)),
+    ]
+    raw = llm.invoke(messages).content
+    data = _safe_json_load(raw)
+
+    req = state.get("req") or {}
+    req.update({
+        "leave_type": data.get("leave_type") or req.get("leave_type"),
+        "start_time": _safe_iso(data.get("start_time")) or req.get("start_time"),
+        "end_time": _safe_iso(data.get("end_time")) or req.get("end_time"),
+        "reason": data.get("reason") or req.get("reason"),
+    })
+    req["requester"] = state.get("requester", "anonymous")
+    return {"req": req}
+
+def validate_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    requester = req.get("requester") or state.get("requester", "anonymous")
+
+    bal = get_leave_balance(requester) or {}
+    annual_balance = float(bal.get("annual_days", 0))
+
+    missing, violations = validate_leave(req, balance_days=annual_balance)
+    return {"missing_fields": missing, "violations": violations, "req": req}
+
+def decide_next(state: LeaveState) -> str:
+    if state.get("missing_fields") or state.get("violations"):
+        return "need_info"
+    return "confirm"
+
+def need_info_node(state: LeaveState) -> dict:
+    missing = state.get("missing_fields") or []
+    violations = state.get("violations") or []
+    tips = []
+    if missing:
+        tips.append("缺少信息：" + "、".join(missing))
+    if violations:
+        tips.append("规则问题：" + "；".join(violations))
+    return {"answer": "；".join(tips) + "。请补充/修正后再说一次。"}
+
+def confirm_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    ans = (
+        "请确认你的请假信息：\n"
+        f"- 类型：{req.get('leave_type')}\n"
+        f"- 开始：{req.get('start_time')}\n"
+        f"- 结束：{req.get('end_time')}\n"
+        f"- 时长：{req.get('duration_days')} 天\n"
+        f"- 原因：{req.get('reason') or '无'}\n"
+        "回复“确认”提交，或直接回复修改后的信息。"
+    )
+    return {"answer": ans}
+
+def decide_confirm(state: LeaveState) -> str:
+    text = (state.get("text") or "").strip().lower()
+    if text in {"确认", "确定", "yes", "ok", "submit"}:
+        return "create"
+    return "end"
+
+def create_leave_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    leave_id = "LV-" + uuid.uuid4().hex[:8]
+    req_to_save = {
+        "leave_id": leave_id,
+        "requester": req["requester"],
+        "leave_type": req["leave_type"],
+        "start_time": req["start_time"],
+        "end_time": req["end_time"],
+        "duration_days": req["duration_days"],
+        "reason": req.get("reason"),
+    }
+    insert_leave_request(req_to_save)
+    return {"leave_id": leave_id, "answer": f"已提交请假申请，编号 {leave_id}，等待审批。"}
+
+# ========= Build Graph =========
+
+def build_leave_graph():
+    g = StateGraph(LeaveState)
+
+    # intent routing
+    g.add_node("intent", intent_node)
+    g.add_node("query", query_leave_node)
+    g.add_node("cancel", cancel_leave_node)
+
+    # apply-flow
+    g.add_node("parse_time", parse_time_node)
+    g.add_node("extract", extract_slots_node)
+    g.add_node("validate", validate_node)
+    g.add_node("need_info", need_info_node)
+    g.add_node("confirm", confirm_node)
+    g.add_node("create", create_leave_node)
+
+    g.add_edge(START, "intent")
+
+    g.add_conditional_edges(
+        "intent",
+        decide_intent,
+        {"apply": "parse_time", "query": "query", "cancel": "cancel"},
+    )
+
+    g.add_edge("parse_time", "extract")
+    g.add_edge("extract", "validate")
+
+    g.add_conditional_edges(
+        "validate",
+        decide_next,
+        {"need_info": "need_info", "confirm": "confirm"},
+    )
+
+    g.add_conditional_edges(
+        "confirm",
+        decide_confirm,
+        {"create": "create", "end": END},
+    )
+
+    g.add_edge("query", END)
+    g.add_edge("cancel", END)
+    g.add_edge("need_info", END)
+    g.add_edge("create", END)
+
+    return g.compile()
+
+测试
+uvicorn app.main:app --reload --port 8002
+
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter","session_id":"s2"}'
+大模型会直接掀你确认是否确定，不会再问时间了。
+
+
+
+之后我么建立请假单表
+CREATE TABLE IF NOT EXISTS leave_requests (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  leave_id VARCHAR(32) NOT NULL UNIQUE,
+  requester VARCHAR(64) NOT NULL,
+  leave_type VARCHAR(16) NOT NULL,
+  start_time DATETIME NOT NULL,
+  end_time DATETIME NOT NULL,
+  duration_days DECIMAL(5,2) NOT NULL,
+  reason VARCHAR(255),
+  status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS leave_balances (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  requester VARCHAR(64) NOT NULL UNIQUE,
+  annual_days DECIMAL(5,2) NOT NULL DEFAULT 0,
+  sick_days DECIMAL(5,2) NOT NULL DEFAULT 0,
+  personal_days DECIMAL(5,2) NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+INSERT INTO leave_balances(requester, annual_days, sick_days, personal_days)
+VALUES('peter', 6.5, 10, 3)
+ON DUPLICATE KEY UPDATE annual_days=6.5;
+
+
+
+添加以来
+pymysql>=1.1.1
+
+
+app/db/mysql.py
+pymysql库进行连接和CRUD
+
+import os
+import pymysql
+from contextlib import contextmanager
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "peter")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "123456")
+MYSQL_DB = os.getenv("MYSQL_DB", "enterprise_kb")
+
+@contextmanager
+def get_conn():
+    conn = pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT,
+        user=MYSQL_USER, password=MYSQL_PASSWORD,
+        database=MYSQL_DB, charset="utf8mb4",
+        autocommit=True,
+        cursorclass=pymysql.cursors.DictCursor,
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_leave_balance(requester: str) -> dict | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT annual_days, sick_days, personal_days FROM leave_balances WHERE requester=%s",
+                (requester,)
+            )
+            return cur.fetchone()
+
+
+def insert_leave_request(req: dict) -> str:
+    """
+    req expects keys: leave_id, requester, leave_type, start_time, end_time, duration_days, reason
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO leave_requests
+                (leave_id, requester, leave_type, start_time, end_time, duration_days, reason, status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,'PENDING')
+                """,
+                (
+                    req["leave_id"], req["requester"], req["leave_type"],
+                    req["start_time"], req["end_time"], req["duration_days"],
+                    req.get("reason")
+                )
+            )
+    return req["leave_id"]
+
+
+def get_leave_request(leave_id: str) -> dict | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM leave_requests WHERE leave_id=%s", (leave_id,))
+            return cur.fetchone()
+
+
+def cancel_leave_request(leave_id: str) -> bool:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE leave_requests SET status='CANCELLED' WHERE leave_id=%s AND status='PENDING'",
+                (leave_id,)
+            )
+            return cur.rowcount > 0
+
+
+
+修改app/workflows/leave/leave_graph.py
+validate_node余额从MySQL查
+在validate_node里把balance_days=5.0换成真实余额
+from app.db.mysql import get_leave_balance
+
+def validate_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    requester = req.get("requester") or state.get("requester", "anonymous")
+
+    bal = get_leave_balance(requester) or {}
+    annual_balance = float(bal.get("annual_days", 0))
+
+    missing, violations = validate_leave(req, balance_days=annual_balance)
+    return {"missing_fields": missing, "violations": violations, "req": req}
+
+
+create_leave_node：插入leave_requests
+from app.db.mysql import insert_leave_request
+
+def create_leave_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    leave_id = "LV-" + uuid.uuid4().hex[:8]
+
+    req_to_save = {
+        "leave_id": leave_id,
+        "requester": req["requester"],
+        "leave_type": req["leave_type"],
+        "start_time": req["start_time"],
+        "end_time": req["end_time"],
+        "duration_days": req["duration_days"],
+        "reason": req.get("reason"),
+    }
+    insert_leave_request(req_to_save)
+
+    return {"leave_id": leave_id, "answer": f"已提交请假申请，编号 {leave_id}，等待审批。"}
+
+
+验证
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter","session_id":"s3"}'
+
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"s3"}'
+ 以上两个不说了，和之前一样
+
+
+SELECT * FROM leave_requests ORDER BY id DESC LIMIT 5;
+SELECT * FROM leave_balances WHERE requester='peter';
+你会看到一条新leave_requests，status=PENDING。
+
+
+
+
+app/workflows/leave/leave_graph.py整文件：LLM时间解析 -》申请-〉查询状态-》取消申请
+
+from __future__ import annotations
+
+import json
+import uuid
+import re
+from datetime import datetime
+from typing import Any, Dict
+
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.deps import get_llm
+from app.workflows.leave.models import LeaveState
+from app.workflows.leave.rules import validate_leave
+from app.db.mysql import (
+    get_leave_balance,
+    insert_leave_request,
+    get_leave_request,
+    cancel_leave_request,
+)
+
+# ========= Prompts =========
+
+SLOT_SYSTEM = (
+    "你是企业HR请假助手。"
+    "你的任务是从用户请假描述中抽取结构化信息。"
+    "只输出JSON，不要解释。"
+)
+
+# NOTE: 双大括号避免 .format() KeyError
+SLOT_USER = """请从下面文本中抽取字段，输出严格 JSON：
+{{
+  "leave_type": "annual|sick|personal|other",
+  "start_time": "YYYY-MM-DD HH:MM 或 null",
+  "end_time": "YYYY-MM-DD HH:MM 或 null",
+  "reason": "string 或 null"
+}}
+
+要求：
+- 如果用户没有明确说开始/结束时间，就输出 null
+- 时间必须是 ISO 8601 格式（YYYY-MM-DD HH:MM）
+- 不要编造时间
+- 只输出 JSON
+
+文本：{text}
+"""
+
+TIME_SYSTEM = (
+    "你是时间解析器。"
+    "请把中文自然语言中的请假时间解析为 ISO 8601 start_time/end_time。"
+    "只输出JSON，不要解释。"
+)
+
+# NOTE: 双大括号避免 .format() KeyError
+TIME_USER = """现在时间是：{now}
+用户文本：{text}
+
+请输出严格 JSON：
+{{
+  "start_time": "YYYY-MM-DD HH:MM 或 null",
+  "end_time": "YYYY-MM-DD HH:MM 或 null"
+}}
+
+规则：
+- 能明确推断出具体日期就填 ISO；否则填 null
+- “下周二/明天/后天/本周五”等要结合 now 推断
+- “上午/下午/全天/半天”：
+  - 全天：09:00-18:00
+  - 上午：09:00-12:00
+  - 下午：13:00-18:00
+  - 半天：若只说半天且无上下文，按上午 09:00-12:00
+- 如果文本里已经出现 ISO 时间，直接按其输出
+- 不要编造不存在的日期
+- 只输出 JSON
+"""
+
+# ========= Helpers =========
+
+def _safe_json_load(s: str) -> Dict[str, Any]:
+    if not s:
+        return {}
+    s = s.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:].strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        return {}
+
+def _safe_iso(s: Any) -> str | None:
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()
+    try:
+        datetime.fromisoformat(s)
+        return s
+    except Exception:
+        return None
+
+def _extract_leave_id(text: str) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"\bLV-[0-9a-fA-F]{6,12}\b", text)
+    return m.group(0) if m else None
+
+# ========= Intent Routing =========
+
+def decide_intent(state: LeaveState) -> str:
+    """apply / query / cancel"""
+    text = (state.get("text") or state.get("question") or "").lower()
+
+    if any(k in text for k in ["取消", "撤销", "作废"]):
+        return "cancel"
+
+    if any(k in text for k in ["查询", "查", "状态", "进度", "结果"]):
+        if any(k in text for k in ["请假", "年假", "病假", "事假", "休假", "调休", "假期", "申请", "单"]):
+            return "query"
+
+    return "apply"
+
+def intent_node(state: LeaveState) -> dict:
+    return {}
+
+# ========= Query / Cancel Nodes =========
+
+def query_leave_node(state: LeaveState) -> dict:
+    text = state.get("text") or state.get("question") or ""
+    leave_id = state.get("leave_id") or _extract_leave_id(text)
+
+    if not leave_id:
+        return {"answer": "请提供请假编号（例如 LV-xxxxxxx），我才能帮你查询。"}
+
+    row = get_leave_request(leave_id)
+    if not row:
+        return {"answer": f"未找到编号为 {leave_id} 的请假申请。"}
+
+    return {
+        "leave_id": leave_id,
+        "answer": (
+            f"请假单 {leave_id} 当前状态：{row['status']}\n"
+            f"类型：{row['leave_type']}\n"
+            f"开始：{row['start_time']}\n"
+            f"结束：{row['end_time']}\n"
+            f"时长：{row['duration_days']} 天\n"
+            f"原因：{row.get('reason') or '无'}"
+        ),
+    }
+
+def cancel_leave_node(state: LeaveState) -> dict:
+    text = state.get("text") or state.get("question") or ""
+    leave_id = state.get("leave_id") or _extract_leave_id(text)
+
+    if not leave_id:
+        return {"answer": "请提供要取消的请假编号（例如 LV-xxxxxxx）。"}
+
+    ok = cancel_leave_request(leave_id)
+    if not ok:
+        return {"answer": "取消失败：未找到该单，或单据不是待审批状态（PENDING）。"}
+
+    return {"leave_id": leave_id, "answer": f"已取消请假申请 {leave_id}。"}
+
+# ========= Apply-flow Nodes =========
+
+def parse_time_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    if _safe_iso(req.get("start_time")) and _safe_iso(req.get("end_time")):
+        return {}
+
+    llm = get_llm()
+    text = state.get("text", "") or state.get("question", "") or ""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    messages = [
+        SystemMessage(content=TIME_SYSTEM),
+        HumanMessage(content=TIME_USER.format(now=now, text=text)),
+    ]
+    raw = llm.invoke(messages).content
+    data = _safe_json_load(raw)
+
+    start = _safe_iso(data.get("start_time"))
+    end = _safe_iso(data.get("end_time"))
+
+    if start or end:
+        req.update({
+            "start_time": start or req.get("start_time"),
+            "end_time": end or req.get("end_time"),
+        })
+        return {"req": req}
+    return {}
+
+def extract_slots_node(state: LeaveState) -> dict:
+    llm = get_llm()
+    text = state.get("text", "") or state.get("question", "") or ""
+
+    messages = [
+        SystemMessage(content=SLOT_SYSTEM),
+        HumanMessage(content=SLOT_USER.format(text=text)),
+    ]
+    raw = llm.invoke(messages).content
+    data = _safe_json_load(raw)
+
+    req = state.get("req") or {}
+    req.update({
+        "leave_type": data.get("leave_type") or req.get("leave_type"),
+        "start_time": _safe_iso(data.get("start_time")) or req.get("start_time"),
+        "end_time": _safe_iso(data.get("end_time")) or req.get("end_time"),
+        "reason": data.get("reason") or req.get("reason"),
+    })
+    req["requester"] = state.get("requester", "anonymous")
+    return {"req": req}
+
+def validate_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    requester = req.get("requester") or state.get("requester", "anonymous")
+
+    bal = get_leave_balance(requester) or {}  # 看看数据库里还有几天假期可以用
+    annual_balance = float(bal.get("annual_days", 0))
+
+    missing, violations = validate_leave(req, balance_days=annual_balance)
+    return {"missing_fields": missing, "violations": violations, "req": req}
+
+def decide_next(state: LeaveState) -> str:
+    if state.get("missing_fields") or state.get("violations"):
+        return "need_info"
+    return "confirm"
+
+def need_info_node(state: LeaveState) -> dict:
+    missing = state.get("missing_fields") or []
+    violations = state.get("violations") or []
+    tips = []
+    if missing:
+        tips.append("缺少信息：" + "、".join(missing))
+    if violations:
+        tips.append("规则问题：" + "；".join(violations))
+    return {"answer": "；".join(tips) + "。请补充/修正后再说一次。"}
+
+def confirm_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    ans = (
+        "请确认你的请假信息：\n"
+        f"- 类型：{req.get('leave_type')}\n"
+        f"- 开始：{req.get('start_time')}\n"
+        f"- 结束：{req.get('end_time')}\n"
+        f"- 时长：{req.get('duration_days')} 天\n"
+        f"- 原因：{req.get('reason') or '无'}\n"
+        "回复“确认”提交，或直接回复修改后的信息。"
+    )
+    return {"answer": ans}
+
+def decide_confirm(state: LeaveState) -> str:
+    text = (state.get("text") or "").strip().lower()
+    if text in {"确认", "确定", "yes", "ok", "submit"}:
+        return "create"
+    return "end"
+
+def create_leave_node(state: LeaveState) -> dict:
+    req = state.get("req") or {}
+    leave_id = "LV-" + uuid.uuid4().hex[:8]
+    req_to_save = {
+        "leave_id": leave_id,
+        "requester": req["requester"],
+        "leave_type": req["leave_type"],
+        "start_time": req["start_time"],
+        "end_time": req["end_time"],
+        "duration_days": req["duration_days"],
+        "reason": req.get("reason"),
+    }
+    insert_leave_request(req_to_save)  # 此时这里还没有这个方法，插入mysql数据库
+    return {"leave_id": leave_id, "answer": f"已提交请假申请，编号 {leave_id}，等待审批。"}
+
+# ========= Build Graph =========
+
+def build_leave_graph():
+    g = StateGraph(LeaveState)
+
+    # intent routing
+    g.add_node("intent", intent_node)
+    g.add_node("query", query_leave_node)
+    g.add_node("cancel", cancel_leave_node)
+
+    # apply-flow
+    g.add_node("parse_time", parse_time_node)
+    g.add_node("extract", extract_slots_node)
+    g.add_node("validate", validate_node)
+    g.add_node("need_info", need_info_node)
+    g.add_node("confirm", confirm_node)
+    g.add_node("create", create_leave_node)
+
+    g.add_edge(START, "intent")
+
+    g.add_conditional_edges(
+        "intent",
+        decide_intent,
+        {"apply": "parse_time", "query": "query", "cancel": "cancel"},
+    )
+
+    g.add_edge("parse_time", "extract")
+    g.add_edge("extract", "validate")
+
+    g.add_conditional_edges(
+        "validate",
+        decide_next,
+        {"need_info": "need_info", "confirm": "confirm"},
+    )
+
+    g.add_conditional_edges(
+        "confirm",
+        decide_confirm,
+        {"create": "create", "end": END},
+    )
+
+    g.add_edge("query", END)
+    g.add_edge("cancel", END)
+    g.add_edge("need_info", END)
+    g.add_edge("create", END)
+
+    return g.compile()
+
+
+测试
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter","session_id":"sq1"}'
+
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"sq1"}'
+
+之后得到输出，注意拷贝LV编号，我的输出是
+{"answer":"已提交请假申请，编号 LV-68c678ba，等待审批。"}%
+
+之后查询状态
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"查我的请假状态 LV-68c678ba","user_role":"public","requester":"peter"}'
+
+
+
+
+取消
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"取消请假申请 LV-68c678ba","user_role":"public","requester":"peter"}'
+
+  {"answer":"已取消请假申请 LV-68c678ba。"}%
