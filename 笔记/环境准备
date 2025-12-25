@@ -1,0 +1,78 @@
+docker虚拟机，虚拟各种软件
+dockdr虚拟的每一个软件一定是很小/迷你linux+这个软件的最小闭环
+chromadb、mysql、redis
+
+sudo docker pull chromadb/chroma
+sudo docker pull mysql:8
+sudo docker pull redis:7
+
+sudo docker ps  查看正在运行的容器（软件）
+sudo docker ps -a   查看所有容器（软件）——包括那些停止的
+
+sudo docker start 容器编号   # 启动一个已经停止的容器
+
+
+
+1. 
+sudo apt update
+
+2. 
+sudo apt install ca-certificates curl
+
+3. 
+sudo install -m 0755 -d /etc/apt/keyrings
+
+4. 
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+
+5. 
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+6. 
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+7. 
+sudo apt update
+
+8. 
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+
+docker虚拟机，虚拟各种软件
+dockdr虚拟的每一个软件一定是很小/迷你linux+这个软件的最小闭环
+chromadb、mysql、redis
+
+sudo docker ps      查看正在运行的容器（软件）
+sudo docker ps -a   查看所有容器（软件）——包括那些停止的
+
+sudo docker start 容器编号   # 启动一个已经停止的容器
+
+
+sudo docker network create some-network
+
+第一次准备mysql
+sudo docker run --env=MYSQL_ROOT_PASSWORD=123456  --network=some-network -p 3306:3306 --restart=always  -d mysql:8
+
+第一次准备chromada
+docker run -d --name chroma --restart=always -p 8000:8000 -e IS_PERSISTENT=TRUE -e PERSIST_DIRECTORY=/chroma/chroma chromadb/chroma
+
+下面是为了用自己的mysql用户和数据库——避免root
+语法：
+CREATE DATABASE 数据库名 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER '用户名'@'%' IDENTIFIED BY '密码';
+
+GRANT alter,select,insert,update,delete,create,drop,index,references,CREATE VIEW,TRIGGER,show view, ALTER ROUTINE, create routine, execute, create temporary tables ON 数据库名.* TO '用户名'@'%';
+
+例子：
+CREATE DATABASE enterprise_kb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER 'tom'@'%' IDENTIFIED BY '123456';
+
+GRANT alter,select,insert,update,delete,create,drop,index,references,CREATE VIEW,TRIGGER,show view, ALTER ROUTINE, create routine, execute, create temporary tables ON enterprise_kb.* TO 'tom'@'%';

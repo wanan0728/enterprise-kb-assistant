@@ -1,0 +1,83 @@
+v1版本主要的作用是快速原型开发。
+在这个阶段会用到一些后面不用的技术，这些技术主要为了客户进行信息的展示使用。
+原型开发。
+
+1. 修改requirements.txt，添加
+python-multipart==0.0.20
+aiofiles==24.1.0
+streamlit==1.40.2
+之后
+pip install -U -r requirements.txt
+
+2. 打开app/ingestion/loader.py，在文件最底部追加下面代码：
+第一个函数主要是为了应对后续文件单独追加而设计的，他就是处理一个单独的文件而已。
+def load_single_file(path: Path) -> List[Document]:
+    """根据文件后缀加载文件，返回LangChain的 Document列表"""
+    suf = path.suffix.lower()
+    if suf == ".pdf":
+        return load_pdf(path)
+    if suf in [".docx", ".doc"]:
+        return load_docx(path)
+    if suf in [".md", ".txt"]:
+        text = path.read_text(encoding="utf-8")
+        return [Document(page_content=text, metadata={"source": str(path)})] if text.strip() else []
+    return []
+
+第二个函数主要是把一批Document切成小块，并且给每一小块贴上权限标签visibility和文档ID。
+def split_with_visibility(docs: List[Document], visibility: str, doc_id: str | None = None) -> List[Document]:
+    chunks = split_docs(docs)
+    for c in chunks:
+        c.metadata = dict(c.metadata or {})
+        c.metadata["visibility"] = visibility
+        if doc_id:
+            c.metadata["doc_id"] = doc_id
+    return chunks
+
+3.main.py
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel
+from app.router_graph import router_graph
+from app.depts import get_vs, get_embeddings
+from app.ingestion.loader import load_single_file, split_with_visibility, load_docs, split_docs
+from app.config import settings
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+import chromadb
+
+app = FastAPI(title="Enterprise KB Assistant")
+DATA_DOCS_DIR = Path("./data/docs")
+DATA_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+class ChatReq(BaseModel):
+    text: str
+    user_role: str = "public"
+    requester: str = "anonymous"
+
+class ChatResp(BaseModel):
+    answer: str
+
+@app.post("/chat", response_model=ChatResp)
+def chat(req: ChatReq):
+    out = router_graph.invoke(req.model_dump())
+    return {"answer": out["answer"]}
+
+@app.post("/reindex")
+def reindex(visibility_default: str = Form("public")):
+    visibility_default = (visibility_default or "public").strip().lower()
+    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+    client.get_or_create_collection(settings.collection_name)
+
+    vs = get_vs()
+    raw_docs = load_docs(str(DATA_DOCS_DIR))  # 我们存放文件的那个目录，云存储
+    if not raw_docs:
+        return {"chunks": 0, "docs": 0, "message": "No documents found in data/docs"}
+
+    chunks = split_docs(raw_docs)
+    for c in chunks:
+        c.metadata = dict(c.metadata or {})
+        c.metadata.setdefault("visibility", visibility_default)
+
+    vs.add_documents(chunks)
+    return {"docs": len(raw_docs), "chunks": len(chunks), "visibility_default": visibility_default}
