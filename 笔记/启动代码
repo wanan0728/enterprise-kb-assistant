@@ -32,5 +32,5 @@ docker start chromadb3
 
 
 git推送代码
-git add .
-git commit -m 'feat:main'
+git push origin master
+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
