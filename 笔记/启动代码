@@ -31,6 +31,5 @@ docker start chromadb2
 docker start chromadb3
 
 
-git推送代码
-git push origin master
+
 
