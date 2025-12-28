@@ -1,0 +1,133 @@
+
+c: 300 
+剩下的都空着给linux
+
+/
+/swap 交换分区 4-8G
+
+
+ubuntu安装python xxx
+
+iamd64
+
+1. 
+sudo apt update
+
+2. 
+sudo apt install ca-certificates curl
+
+3. 
+sudo install -m 0755 -d /etc/apt/keyrings
+
+4. 
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+
+5. 
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+6. 
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+7. 
+sudo apt update
+
+8. 
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+
+mysql数据库，版本只能是8。
+
+
+
+$ sudo docker network create some-network
+
+$ sudo docker run --env=MYSQL_ROOT_PASSWORD=123456 --network=some-network -p 3306:3306 --restart=always -d mysql:8
+这样建立的mysql用户名默认是root，密码是123456
+
+
+mysql是一个软件，我们做项目的时候需要为每一个项目建立一个数据库。
+
+我们需要建立新的数据库，名字建议 enterprise_kb
+
+语法：
+CREATE DATABASE 数据库名 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER '用户名'@'%' IDENTIFIED BY '密码';
+
+GRANT alter,select,insert,update,delete,create,drop,index,references,CREATE VIEW,TRIGGER,show view, ALTER ROUTINE, create routine, execute, create temporary tables ON 数据库名.* TO '用户名'@'%';
+
+例子：
+CREATE DATABASE enterprise_kb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER 'tom'@'%' IDENTIFIED BY '123456';
+
+GRANT alter,select,insert,update,delete,create,drop,index,references,CREATE VIEW,TRIGGER,show view, ALTER ROUTINE, create routine, execute, create temporary tables ON enterprise_kb.* TO 'tom'@'%';
+
+以上三个句子用root用户去执行。
+
+咱们公司的项目在
+http://xxxx.github.com/xhfsjkdhfsjkd
+
+你拉下来看看
+
+docker安装和使用软件非常便利，
+
+docker run redis:7
+docker run chromadb:xxxxxx
+
+
+
+立项：国家批款，管网做人工智能改造。
+1. 内部系统人工智能化
+	人事审批、员工管理、资产管理全部AI化
+
+2. 工单处理
+	管道架设，维修
+
+	客户打电话，说没有气了。
+	或者总部检测所有输出的天然气和表对不上
+	系统就要生成工单，自动派师傅去维修。
+
+	知识检索：xxxx问题
+	1. 查
+	2. 查
+	3. 查
+
+	紧急程度
+	打印机坏了 选紧急等级p0  2
+	机器学 判断等级    
+
+3. 差旅
+	
+4. 管线图识图——图形图像识别
+
+
+LangGraph: 业务流程图或者叫工作流。
+工作流：我们完成企业的某件事情需要做的几个步骤，这些步骤如何连接和反复。
+
+企业文档通过rag（读取，切割，放入向量数据库）
+
+
+比如用deepseek，我发出一个命令，比如 
+今天天气是什么？
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

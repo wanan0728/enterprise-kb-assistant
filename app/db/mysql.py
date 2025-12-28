@@ -1,17 +1,15 @@
-# pymysql库进行连接和CRUD
-
 import os
 import pymysql
 from contextlib import contextmanager
 
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "tom")
+MYSQL_USER = os.getenv("MYSQL_USER", "peter")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "123456")
 MYSQL_DB = os.getenv("MYSQL_DB", "enterprise_kb")
 
 @contextmanager
-def get_conn():  # 获取数据库连接
+def get_conn():
     conn = pymysql.connect(
         host=MYSQL_HOST, port=MYSQL_PORT,
         user=MYSQL_USER, password=MYSQL_PASSWORD,
@@ -26,17 +24,19 @@ def get_conn():  # 获取数据库连接
 
 
 def get_leave_balance(requester: str) -> dict | None:
-    # 根据用户名requester查询这个用户还有几天年假，病假。。。可以请
-    with get_conn() as conn:  # 获得连接
-        with conn.cursor() as cur:  # 获得游标
+    with get_conn() as conn:
+        with conn.cursor() as cur:
             cur.execute(
                 "SELECT annual_days, sick_days, personal_days FROM leave_balances WHERE requester=%s",
                 (requester,)
-            ) # 执行SQL语句
-            return cur.fetchone()  # 获得返回结果
+            )
+            return cur.fetchone()
 
 
 def insert_leave_request(req: dict) -> str:
+    """
+    req expects keys: leave_id, requester, leave_type, start_time, end_time, duration_days, reason
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -55,7 +55,7 @@ def insert_leave_request(req: dict) -> str:
 
 
 def get_leave_request(leave_id: str) -> dict | None:
-    with get_conn() as conn:  #
+    with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM leave_requests WHERE leave_id=%s", (leave_id,))
             return cur.fetchone()
@@ -69,6 +69,3 @@ def cancel_leave_request(leave_id: str) -> bool:
                 (leave_id,)
             )
             return cur.rowcount > 0
-
-
-print(get_leave_balance("peter"))

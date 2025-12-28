@@ -39,7 +39,7 @@ curl -X POST http://127.0.0.1:8002/chat \
 (.venv) (base) peter@Peters-MacBook-Air enterprise-kb-assistant %
 curl -X POST http://127.0.0.1:8002/chat \
   -H "Content-Type: application/json" \
-  -d '{"text":"我要请年假，2025-11-26 09:00 到 2025-11-26 18:00","user_role":"public","requester":"peter","session_id":"s1"}'
+  -d '{"text":"我要请年假，2025-12-28 09:00 到 2025-12-28 18:00","user_role":"public","requester":"peter","session_id":"s1"}'
 
 {"answer":"请确认你的请假信息：\n- 类型：annual\n- 开始：2025-11-26 09:00\n- 结束：2025-11-26 18:00\n- 时长：1.12 天\n- 原因：无\n回复“确认”提交，或直接回复修改后的信息。"}%
 

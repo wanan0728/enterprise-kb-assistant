@@ -1,0 +1,174 @@
+
+机器学习，深度学习，大模型
+1. 代码会写——所有人必须掌握
+2. 库的基本原理
+3. 数学推导
+
+1. 机器学习工程师
+2. 深度学习工程师
+
+后续所有岗位基本都有一条，需要掌握/了解常见的机器学习/深度
+
+
+管网
+RAG/LangChain
+
+Linux->双系统/虚拟机（配置要好8-16内存）
+ubuntu 24.04版本
+
+
+大模型——deepseek
+1. 本地——ubuntu在本地搭建大模型
+2. 远程——手机app，网页版本
+
+
+deepseek api，然后deepseek充值5块钱
+质朴api
+千问api
+我们要用python代码调用这些库完成所需要的工作。
+
+chatgpt 
+
+
+1. 建立项目enterprise-kb-assistant
+需要Python 3.10以上
+
+2. 下载项目所需要的依赖
+在项目根目录下建立文件requirements.txt，内容如下
+
+fastapi==0.121.3
+uvicorn[standard]==0.38.0
+pydantic==2.12.4
+python-dotenv>=1.0,<2.0
+
+langchain==1.0.8
+langchain-core==1.1.0
+langchain-community==0.4.1
+langchain-openai==1.0.3
+langgraph==1.0.3
+
+langchain-chroma==1.0.0
+chromadb==1.3.5
+
+tiktoken==0.12.0
+pypdf==6.3.0
+python-docx==1.2.0
+rank-bm25==0.2.2
+
+
+准备好了上面的文件，如何安装到venv这个虚拟环境中。
+在项目根目录下点击打开终端
+pip install -r requirements.txt
+
+
+
+3. 在项目根目录下建立app/config.py
+这个文件用于项目中所有相关软件的统一配置
+
+from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # 将操作系统中的环境变量读取一下
+
+class Settings(BaseModel):  # BaseModel后续这个类会转换为JSON/字典方便使用
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
+    chroma_dir: str = os.getenv("CHROMA_DIR", "./data/chroma")
+    chroma_host: str = os.getenv("CHROMA_HOST", "localhost")
+    chroma_port: int = int(os.getenv("CHROMA_PORT", "8000"))
+    collection_name: str = os.getenv("COLLECTION_NAME", "knowledge_base")
+    chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))
+    chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "120"))
+
+settings = Settings()
+
+
+4. OpenAI
+openai是chatgpt的母公司
+
+python调用大模型的时候，实际上就是在用openai的库。
+所以这个库默认连接的就是chatgpt这个大语言模型（LLM）。
+
+但是openai后来开放了自己的库，让他可以兼容任意大模型。
+
+https://api.deepseek.com/v1
+
+
+5. app/depts.py
+千问大模型需要添加依赖： dashscope==1.20.0
+
+depts/py的作用是配置好一个大语言模型，还有一个嵌入式模型
+
+嵌入式模型的作用：将文档、声音、视频放入（嵌入）向量数据库，比如chromadb
+
+chatgpt自身既拥有大语言模型，也拥有嵌入式模型。
+但是
+deepseek只有大语言模型的功能，没有嵌入式模型的功能。
+所以我们需要用千问或者质朴等模型提供的嵌入式模型功能。
+
+# 下面是直接连接chatgpt的语法
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from app.config import settings
+
+def get_llm():
+    return ChatOpenAI(
+        model=settings.model_name,
+        api_key=settings.openai_api_key,
+        temperature=0.2,  # 大模型温度
+        streaming=True,   # 支持流式输出
+    )
+
+def get_embeddings():
+    return OpenAIEmbeddings(api_key=settings.openai_api_key)
+
+
+
+
+# 下面是针对deepseek和千问嵌入式模型的代码
+from langchain_openai import ChatOpenAI
+from langchain_community.embeddings import DashScopeEmbeddings
+from app.config import settings
+from app.rag.vectorstore import get_vectorstore
+
+def get_llm():  # 配置一个大语言模型，此处用的是deepseek
+    return ChatOpenAI(
+        base_url=settings.deepseek_base_url,
+        model=settings.model_name,
+        api_key=settings.deepseek_api_key,
+        temperature=0.2,
+        streaming=True,
+    )
+
+def get_embeddings():  # 此处配置的是千问的嵌入式模型
+    return DashScopeEmbeddings(  # 此处这个类是千问的，所以不用url，默认就连接到千问
+        model=settings.qianwen_embedding_model_name,
+        dashscope_api_key=setting.qianwen_api_key,
+    )
+
+如果你用的是多个大模型，那么应该有两个key
+from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # 将操作系统中的环境变量读取一下
+
+class Settings(BaseModel):  # BaseModel后续这个类会转换为JSON/字典方便使用
+	deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", 'https://api.deepseek.com/v1')
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "自己加上自己的key")
+    deepseek_model_name: str = os.getenv("DEEPSEEK_MODEL_NAME", "deepseek_chat")
+
+	qianwen_api_key: str = os.getenv("QIANWEN_API_KEY", "")
+    qianwen_embedding_model_name: str = os.getenv("QIANWEN_EMBEDDING_MODEL_NAME", 'text-embedding-v3')
+	......
+
+settings = Settings()
+
+
+if __name__ == "__main__":
+    resp = get_llm().invoke('你是谁？你的版本是什么？')
+    print(resp.content)
+    
+# 用单元测试来测试这段代码得到结果
+
+
