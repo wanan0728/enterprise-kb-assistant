@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c406d478-acbb-4c43-a466-73f717604b12" name="更改" comment="1">
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/笔记/启动代码" beforeDir="false" afterPath="$PROJECT_DIR$/笔记/启动代码" afterDir="false" />
     </list>
@@ -32,7 +31,7 @@
 }</component>
   <component name="GithubPullRequestsUISettings"><![CDATA[{
   "selectedUrlAndAccountId": {
-    "url": "https://YOUR_TOKEN@github.com/wanan0728/enterprise-kb-assistant.git",
+    "url": "https://github.com/wanan0728/enterprise-kb-assistant.git",
     "accountId": "c1690516-8f1e-4312-8b5f-53debb04f696"
   }
 }]]></component>
@@ -165,7 +164,8 @@
       <workItem from="1766733287047" duration="5422000" />
       <workItem from="1766885739924" duration="654000" />
       <workItem from="1766886467161" duration="5993000" />
-      <workItem from="1766894390817" duration="1049000" />
+      <workItem from="1766894390817" duration="1095000" />
+      <workItem from="1766895558924" duration="65000" />
     </task>
     <task id="LOCAL-00001" summary="1">
       <option name="closed" value="true" />
@@ -215,7 +215,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766894031839</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="1">
+      <option name="closed" value="true" />
+      <created>1766895445380</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1766895445380</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
