@@ -5,12 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c406d478-acbb-4c43-a466-73f717604b12" name="更改" comment="1">
-      <change afterPath="$PROJECT_DIR$/app/db/redis_session.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/笔记/v4笔记.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/chroma_db/57403acd-a962-4112-9d92-595f2e242920/length.bin" beforeDir="false" afterPath="$PROJECT_DIR$/app/chroma_db/57403acd-a962-4112-9d92-595f2e242920/length.bin" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/chroma_db/chroma.sqlite3" beforeDir="false" afterPath="$PROJECT_DIR$/app/chroma_db/chroma.sqlite3" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/db/mysql.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/db/mysql.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/workflows/leave/leave_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/workflows/leave/leave_graph.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/笔记/测试代码" beforeDir="false" afterPath="$PROJECT_DIR$/笔记/测试代码" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,6 +40,9 @@
     &quot;accountId&quot;: &quot;c1690516-8f1e-4312-8b5f-53debb04f696&quot;
   }
 }</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/笔记/v4笔记.txt" root0="FORCE_HIGHLIGHTING" />
+  </component>
   <component name="McpProjectServerCommands">
     <commands />
     <urls />
@@ -64,7 +68,7 @@
     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
     &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/home/user/PycharmProjects/enterprise-kb-assistant/笔记/课堂笔记&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/user/PycharmProjects/enterprise-kb-assistant/笔记&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
@@ -81,6 +85,7 @@
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/笔记" />
       <recent name="$PROJECT_DIR$/笔记/课堂笔记" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
@@ -196,6 +201,9 @@
       <workItem from="1766886467161" duration="5993000" />
       <workItem from="1766894390817" duration="1095000" />
       <workItem from="1766895558924" duration="1063000" />
+      <workItem from="1766896632434" duration="180000" />
+      <workItem from="1767055705535" duration="5750000" />
+      <workItem from="1767833219279" duration="621000" />
     </task>
     <task id="LOCAL-00001" summary="1">
       <option name="closed" value="true" />
@@ -269,7 +277,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766895637102</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="1">
+      <option name="closed" value="true" />
+      <created>1766896702622</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1766896702622</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

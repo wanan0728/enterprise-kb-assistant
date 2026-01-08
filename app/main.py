@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 import chromadb
+from app.db.redis_session import load_session, save_session
 
 app = FastAPI(title="Enterprise KB Assistant")
 DATA_DOCS_DIR = Path("./data/docs")
@@ -41,28 +42,39 @@ class ChatReq(BaseModel):
 # 响应：后台送回给前台的结果就叫响应
 class ChatResp(BaseModel):
     answer: str
+    session_id: Optional[str] = None    # ⚠️添加
+    active_route: Optional[str] = None  # ⚠️添加
 {"answer":""}
 
 
 @app.post("/chat", response_model=ChatResp)
 def chat(req: ChatReq):
     payload = req.model_dump()
-    sid = payload.get("session_id")
+    text = payload.get("text") or payload.get("question") or ""
 
-    if sid and sid in SESSIONS:  # sid不空且在session这个变量里存在
-        prev = SESSIONS[sid]
-        merged = {**prev, **payload}
-        merged["text"] = payload.get("text")
+    # 1) get or create session id
+    sid = payload.get("session_id") or f"sid-{uuid.uuid4().hex[:10]}"
+    payload["session_id"] = sid
+
+    # 2) load previous state from redis and merge
+    prev_state = load_session(sid)
+    if prev_state:
+        merged = {**prev_state, **payload}
+        merged["text"] = text
         payload = merged
-        # 这段是将旧的提问+回答和现在的提问合并然后准备重新送给大模型
 
+    # 3) run router graph
     out = router_graph.invoke(payload)
 
-    if sid:
-        SESSIONS[sid] = {**payload, **out}
+    # 4) save new state to redis
+    new_state = {**payload, **out}
+    save_session(sid, new_state)
 
-    return {"answer": out["answer"]}
-
+    return {
+        "answer": out.get("answer"),
+        "session_id": sid,
+        "active_route": new_state.get("active_route"),
+    }
 # chat函数什么时候执行：只要有前台调用了http://localhost:8000/chat之后就会立刻执行
 
 

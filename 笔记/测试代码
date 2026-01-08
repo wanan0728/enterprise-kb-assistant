@@ -49,3 +49,35 @@ curl -X POST http://127.0.0.1:8002/chat \
   -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"s1"}'
 
 {"answer":"已为你提交请假申请，编号 LV-ec201af1，等待审批。"}%
+
+
+
+v5测试
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter"}'
+# 拿session_id  sid
+
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"sid-3552e856ee"}'
+# 拿leave_id，  lv
+
+
+列出最近3条
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"列出我最近3条请假记录","user_role":"public","requester":"peter"}'
+
+
+修改带蛇皮
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"修改请假 LV-5827b076，改为下周二到下周四下午2点到6点，改成事假","user_role":"public","requester":"peter"}'
+# {"answer":"已修改请假单 LV-5827b076：\n- 类型：personal\n- 开始：2025-11-29 13:00\n- 结束：2025-11-29 18:00\n- 原因：无","session_id":"sid-655a893f0e","active_route":"leave"}%
+
+
+确认已经修改
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"查我的请假状态 LV-5827b076","user_role":"public","requester":"peter"}'

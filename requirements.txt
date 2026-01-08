@@ -28,3 +28,4 @@ pymysql>=1.1.1
 pymysql[rsa]
 
 redis==7.1.0
+booktype
