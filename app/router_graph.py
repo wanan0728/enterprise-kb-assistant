@@ -41,7 +41,7 @@ def decide_route(state: RouterState) -> str:
 
     # 关键词路由
     text = (state.get("text") or state.get("question") or "").lower()
-    if any(k in text for k in ["请假", "年假", "病假", "事假", "休假", "调休", "假期", "请一天假", "请半天假"]):
+    if any(k in text for k in ["请假", "年假", "病假", "事假", "休假", "调休", "假期", "请一天假", "请半天假" ,"审批"]):
         return "leave"
 
     return "qa"

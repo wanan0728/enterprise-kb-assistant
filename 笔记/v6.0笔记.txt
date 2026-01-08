@@ -1,3 +1,42 @@
+v6
+把审批流approve/reject权限加回来，让leave业务线100%落地
+
+数据库先行
+def approve_leave_request(leave_id: str, approver: str) -> bool:
+    """
+    Approve a leave request.
+    Only PENDING requests can be approved.
+    Return True if updated, False otherwise.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE leave_requests SET status='APPROVED' "
+                "WHERE leave_id=%s AND status='PENDING'",
+                (leave_id,),
+            )
+            return cur.rowcount > 0
+
+
+def reject_leave_request(leave_id: str, approver: str, reason: str | None = None) -> bool:
+    """
+    Reject a leave request.
+    Only PENDING requests can be rejected.
+    Optionally override reason.
+    Return True if updated, False otherwise.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE leave_requests "
+                "SET status='REJECTED', reason=COALESCE(%s, reason) "
+                "WHERE leave_id=%s AND status='PENDING'",
+                (reason, leave_id),
+            )
+            return cur.rowcount > 0
+
+
+leave——graph最终版本
 from __future__ import annotations
 
 import json
@@ -9,7 +48,7 @@ from typing import Any, Dict
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.depts import get_llm
+from app.deps import get_llm
 from app.workflows.leave.models import LeaveState
 from app.workflows.leave.rules import validate_leave
 from app.db.mysql import (
@@ -547,3 +586,41 @@ def build_leave_graph():
     g.add_edge("create", END)
 
     return g.compile()
+
+
+测试
+先申请一条待审批单
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我下周二想请一天年假","user_role":"public","requester":"peter"}'
+# 拿session_id
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"确认","user_role":"public","requester":"peter","session_id":"sid-a059d435d7"}'
+# 拿leave_id: LV-c0ad6329
+
+重点‼️
+public 用户试图审批（应被拒）
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"审批通过 请假单 LV-3816f971","user_role":"public","requester":"peter"}'
+你没有审批权限（需要HR/Admin）
+{"answer":"你没有审批权限（需要 HR/Admin）。","session_id":"sid-d50f153bb6","active_route":"leave"}%    
+
+
+hr/admin去审批（应通过）
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"审批通过 LV-92ff0859","user_role":"hr","requester":"alice"}'
+
+已审批通过请假单LV-c0ad6329
+
+
+下面我也懒得搞了 试试驳回
+
+curl -X POST http://127.0.0.1:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"text":"驳回 LV-c0ad6329 因为时间冲突","user_role":"admin","requester":"bob"}'
+期望：status=REJECTED，reason 更新。
+
+

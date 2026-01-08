@@ -5,13 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c406d478-acbb-4c43-a466-73f717604b12" name="更改" comment="1">
-      <change afterPath="$PROJECT_DIR$/笔记/v4笔记.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/笔记/v6.0笔记.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/db/mysql.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/db/mysql.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/chroma_db/57403acd-a962-4112-9d92-595f2e242920/length.bin" beforeDir="false" afterPath="$PROJECT_DIR$/app/chroma_db/57403acd-a962-4112-9d92-595f2e242920/length.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/chroma_db/chroma.sqlite3" beforeDir="false" afterPath="$PROJECT_DIR$/app/chroma_db/chroma.sqlite3" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/router_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/router_graph.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/workflows/leave/leave_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/workflows/leave/leave_graph.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/笔记/测试代码" beforeDir="false" afterPath="$PROJECT_DIR$/笔记/测试代码" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -42,6 +42,7 @@
 }</component>
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/笔记/v4笔记.txt" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/笔记/v6.0笔记.txt" root0="FORCE_HIGHLIGHTING" />
   </component>
   <component name="McpProjectServerCommands">
     <commands />
@@ -203,7 +204,7 @@
       <workItem from="1766895558924" duration="1063000" />
       <workItem from="1766896632434" duration="180000" />
       <workItem from="1767055705535" duration="5750000" />
-      <workItem from="1767833219279" duration="621000" />
+      <workItem from="1767833219279" duration="4029000" />
     </task>
     <task id="LOCAL-00001" summary="1">
       <option name="closed" value="true" />
@@ -285,7 +286,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766896702622</updated>
     </task>
-    <option name="localTasksCounter" value="11" />
+    <task id="LOCAL-00011" summary="1">
+      <option name="closed" value="true" />
+      <created>1767834292365</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1767834292366</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
